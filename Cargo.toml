@@ -1,0 +1,44 @@
+[package]
+name = "proxyd"
+version = "0.1.0"
+edition = "2021"
+authors = ["NetworkCats"]
+description = "IP reputation API service with gRPC and REST interfaces"
+license = "MIT"
+repository = "https://github.com/NetworkCats/ProxyD"
+
+[dependencies]
+actix-web = "4"
+actix-rt = "2"
+tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
+num_cpus = "1"
+arc-swap = "1"
+rayon = "1"
+tonic = "0.12"
+prost = "0.13"
+heed = "0.20"
+ipnetwork = "0.20"
+reqwest = { version = "0.12", features = ["rustls-tls"], default-features = false }
+csv = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+prometheus = "0.13"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+thiserror = "2"
+once_cell = "1"
+bytemuck = { version = "1", features = ["derive"] }
+sha2 = "0.10"
+hex = "0.4"
+
+[build-dependencies]
+tonic-build = "0.12"
+
+[dev-dependencies]
+tempfile = "3"
+
+[[bin]]
+name = "proxyd"
+path = "src/main.rs"

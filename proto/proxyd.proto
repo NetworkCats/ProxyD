@@ -1,0 +1,54 @@
+syntax = "proto3";
+
+package proxyd;
+
+service ProxyD {
+  rpc LookupIP(IPRequest) returns (ReputationResponse);
+  rpc LookupRange(RangeRequest) returns (ReputationResponse);
+  rpc BatchLookupIP(BatchIPRequest) returns (BatchReputationResponse);
+  rpc BatchLookupRange(BatchRangeRequest) returns (BatchReputationResponse);
+}
+
+message IPRequest {
+  string ip = 1;
+}
+
+message RangeRequest {
+  string cidr = 1;
+}
+
+message ReputationResponse {
+  bool found = 1;
+  string query = 2;
+  ReputationFlags flags = 3;
+  repeated MatchedEntry matched_entries = 4;
+}
+
+message ReputationFlags {
+  bool anonblock = 1;
+  bool proxy = 2;
+  bool vpn = 3;
+  bool cdn = 4;
+  bool public_wifi = 5;
+  bool rangeblock = 6;
+  bool school_block = 7;
+  bool tor = 8;
+  bool webhost = 9;
+}
+
+message MatchedEntry {
+  string entry = 1;
+  ReputationFlags flags = 2;
+}
+
+message BatchIPRequest {
+  repeated string ips = 1;
+}
+
+message BatchRangeRequest {
+  repeated string cidrs = 1;
+}
+
+message BatchReputationResponse {
+  repeated ReputationResponse results = 1;
+}

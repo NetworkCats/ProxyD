@@ -1,0 +1,16 @@
+target/
+.git/
+.gitignore
+.github/
+*.md
+!README.md
+Dockerfile
+.dockerignore
+*.log
+*.lock
+!Cargo.lock
+.idea/
+.vscode/
+*.pdb
+debug/
+mutants.out*/

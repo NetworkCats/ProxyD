@@ -1,0 +1,152 @@
+name: Integration Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install protobuf compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Install grpcurl
+        run: |
+          curl -sSL https://github.com/fullstorydev/grpcurl/releases/download/v1.9.1/grpcurl_1.9.1_linux_x86_64.tar.gz | tar -xz
+          sudo mv grpcurl /usr/local/bin/
+
+      - name: Install hey
+        run: |
+          curl -sSL https://hey-release.s3.us-east-2.amazonaws.com/hey_linux_amd64 -o hey
+          chmod +x hey
+          sudo mv hey /usr/local/bin/
+
+      - name: Start service
+        run: |
+          mkdir -p /tmp/proxyd-data
+          PROXYD_DATA_DIR=/tmp/proxyd-data ./target/release/proxyd &
+          echo $! > /tmp/proxyd.pid
+        env:
+          RUST_LOG: proxyd=info
+
+      - name: Wait for service readiness
+        run: |
+          for i in {1..60}; do
+            if curl -sf http://localhost:7891/health > /dev/null 2>&1; then
+              echo "Service is ready"
+              exit 0
+            fi
+            echo "Waiting for service... ($i/60)"
+            sleep 2
+          done
+          echo "Service failed to start"
+          exit 1
+
+      - name: Test REST health endpoint
+        run: |
+          response=$(curl -sf http://localhost:7891/health)
+          echo "Health response: $response"
+          echo "$response" | jq -e '.status == "healthy"'
+
+      - name: Test REST metrics endpoint
+        run: |
+          response=$(curl -sf http://localhost:7891/metrics)
+          echo "Metrics response (first 500 chars):"
+          echo "$response" | head -c 500
+          echo "$response" | grep -q "proxyd_"
+
+      - name: Test REST IP lookup
+        run: |
+          response=$(curl -sf http://localhost:7891/v1/ip/8.8.8.8)
+          echo "IP lookup response: $response"
+          echo "$response" | jq -e '.query == "8.8.8.8"'
+
+      - name: Test REST range lookup
+        run: |
+          response=$(curl -sf "http://localhost:7891/v1/range?cidr=8.8.8.0/24")
+          echo "Range lookup response: $response"
+          echo "$response" | jq -e '.query == "8.8.8.0/24"'
+
+      - name: Test gRPC LookupIP
+        run: |
+          response=$(grpcurl -plaintext -proto proto/proxyd.proto -d '{"ip": "8.8.8.8"}' localhost:7892 proxyd.ProxyD/LookupIP)
+          echo "gRPC LookupIP response: $response"
+          echo "$response" | jq -e '.query == "8.8.8.8"'
+
+      - name: Test gRPC LookupRange
+        run: |
+          response=$(grpcurl -plaintext -proto proto/proxyd.proto -d '{"cidr": "8.8.8.0/24"}' localhost:7892 proxyd.ProxyD/LookupRange)
+          echo "gRPC LookupRange response: $response"
+          echo "$response" | jq -e '.query == "8.8.8.0/24"'
+
+      - name: Test REST batch IP lookup
+        run: |
+          response=$(curl -sf -X POST -H "Content-Type: application/json" -d '{"ips": ["8.8.8.8", "1.1.1.1"]}' http://localhost:7891/v1/ip/batch)
+          echo "Batch IP lookup response: $response"
+          echo "$response" | jq -e '.[0].query == "8.8.8.8"'
+          echo "$response" | jq -e '.[1].query == "1.1.1.1"'
+
+      - name: Test REST batch range lookup
+        run: |
+          response=$(curl -sf -X POST -H "Content-Type: application/json" -d '{"cidrs": ["8.8.8.0/24", "1.1.1.0/24"]}' http://localhost:7891/v1/range/batch)
+          echo "Batch range lookup response: $response"
+          echo "$response" | jq -e '.[0].query == "8.8.8.0/24"'
+          echo "$response" | jq -e '.[1].query == "1.1.1.0/24"'
+
+      - name: Test gRPC BatchLookupIP
+        run: |
+          response=$(grpcurl -plaintext -proto proto/proxyd.proto -d '{"ips": ["8.8.8.8", "1.1.1.1"]}' localhost:7892 proxyd.ProxyD/BatchLookupIP)
+          echo "gRPC BatchLookupIP response: $response"
+          echo "$response" | jq -e '.results[0].query == "8.8.8.8"'
+          echo "$response" | jq -e '.results[1].query == "1.1.1.1"'
+
+      - name: Test gRPC BatchLookupRange
+        run: |
+          response=$(grpcurl -plaintext -proto proto/proxyd.proto -d '{"cidrs": ["8.8.8.0/24", "1.1.1.0/24"]}' localhost:7892 proxyd.ProxyD/BatchLookupRange)
+          echo "gRPC BatchLookupRange response: $response"
+          echo "$response" | jq -e '.results[0].query == "8.8.8.0/24"'
+          echo "$response" | jq -e '.results[1].query == "1.1.1.0/24"'
+
+      - name: Load test REST IP lookup
+        run: |
+          echo "Running load test: 100 requests, 10 concurrent"
+          hey -n 100 -c 10 http://localhost:7891/v1/ip/8.8.8.8
+
+      - name: Load test REST range lookup
+        run: |
+          echo "Running load test: 100 requests, 10 concurrent"
+          hey -n 100 -c 10 "http://localhost:7891/v1/range?cidr=8.8.8.0/24"
+
+      - name: Stop service
+        if: always()
+        run: |
+          if [ -f /tmp/proxyd.pid ]; then
+            kill $(cat /tmp/proxyd.pid) 2>/dev/null || true
+          fi
