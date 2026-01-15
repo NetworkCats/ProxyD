@@ -276,3 +276,91 @@ pub async fn rebuild_from_csv(db: &Arc<Database>, config: &Config) -> Result<u64
     info!("Database rebuilt: {} records", count);
     Ok(count)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_bool_true_values() {
+        assert!(parse_bool("true"));
+        assert!(parse_bool("True"));
+        assert!(parse_bool("TRUE"));
+        assert!(parse_bool("1"));
+        assert!(parse_bool("yes"));
+        assert!(parse_bool("Yes"));
+        assert!(parse_bool("YES"));
+        assert!(parse_bool("  true  "));
+    }
+
+    #[test]
+    fn test_parse_bool_false_values() {
+        assert!(!parse_bool("false"));
+        assert!(!parse_bool("0"));
+        assert!(!parse_bool("no"));
+        assert!(!parse_bool(""));
+        assert!(!parse_bool("invalid"));
+    }
+
+    #[test]
+    fn test_parse_csv_parallel_basic() {
+        let csv = "ip,proxy,vpn,tor\n192.168.1.1,true,false,true\n10.0.0.0/8,false,true,false";
+        let records = parse_csv_parallel(csv).unwrap();
+
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].ip, "192.168.1.1");
+        assert!(records[0].flags.proxy);
+        assert!(!records[0].flags.vpn);
+        assert!(records[0].flags.tor);
+
+        assert_eq!(records[1].ip, "10.0.0.0/8");
+        assert!(!records[1].flags.proxy);
+        assert!(records[1].flags.vpn);
+    }
+
+    #[test]
+    fn test_parse_csv_parallel_missing_columns() {
+        let csv = "ip,proxy\n192.168.1.1,true";
+        let records = parse_csv_parallel(csv).unwrap();
+
+        assert_eq!(records.len(), 1);
+        assert!(records[0].flags.proxy);
+        assert!(!records[0].flags.vpn);
+        assert!(!records[0].flags.tor);
+    }
+
+    #[test]
+    fn test_parse_csv_parallel_empty_ip_filtered() {
+        let csv = "ip,proxy\n,true\n192.168.1.1,true";
+        let records = parse_csv_parallel(csv).unwrap();
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].ip, "192.168.1.1");
+    }
+
+    #[test]
+    fn test_parse_csv_parallel_empty() {
+        let csv = "ip,proxy,vpn";
+        let records = parse_csv_parallel(csv).unwrap();
+        assert!(records.is_empty());
+    }
+
+    #[test]
+    fn test_parse_csv_parallel_all_flag_columns() {
+        let csv = "ip,anonblock,proxy,vpn,cdn,public-wifi,rangeblock,school-block,tor,webhost\n\
+                   1.2.3.4,1,1,1,1,1,1,1,1,1";
+        let records = parse_csv_parallel(csv).unwrap();
+
+        assert_eq!(records.len(), 1);
+        let flags = &records[0].flags;
+        assert!(flags.anonblock);
+        assert!(flags.proxy);
+        assert!(flags.vpn);
+        assert!(flags.cdn);
+        assert!(flags.public_wifi);
+        assert!(flags.rangeblock);
+        assert!(flags.school_block);
+        assert!(flags.tor);
+        assert!(flags.webhost);
+    }
+}
