@@ -1,5 +1,5 @@
 # Build stage with Chainguard Rust image for supply chain security
-FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/rust:latest-dev AS builder
+FROM cgr.dev/chainguard/rust:latest-dev AS builder
 
 USER root
 RUN apk add --no-cache protobuf-dev
@@ -10,28 +10,16 @@ COPY Cargo.toml Cargo.lock* ./
 COPY build.rs ./
 COPY proto ./proto
 
-ARG TARGETPLATFORM
-RUN case "$TARGETPLATFORM" in \
-        "linux/amd64") RUST_TARGET="x86_64-unknown-linux-gnu" ;; \
-        "linux/arm64") RUST_TARGET="aarch64-unknown-linux-gnu" ;; \
-        *) echo "Unsupported platform: $TARGETPLATFORM" && exit 1 ;; \
-    esac && \
-    rustup target add "$RUST_TARGET" && \
-    mkdir src && \
+RUN mkdir src && \
     echo "fn main() {}" > src/main.rs && \
-    cargo build --release --target "$RUST_TARGET" && \
+    cargo build --release && \
     rm -rf src
 
 COPY src ./src
 
-RUN case "$TARGETPLATFORM" in \
-        "linux/amd64") RUST_TARGET="x86_64-unknown-linux-gnu" ;; \
-        "linux/arm64") RUST_TARGET="aarch64-unknown-linux-gnu" ;; \
-    esac && \
-    touch src/main.rs && \
-    cargo build --release --target "$RUST_TARGET" && \
-    mkdir -p /app/output && \
-    cp "/app/target/$RUST_TARGET/release/proxyd" /app/output/proxyd
+RUN touch src/main.rs && \
+    cargo build --release && \
+    cp /app/target/release/proxyd /app/proxyd
 
 # Runtime stage with Chainguard Wolfi base for minimal attack surface
 FROM cgr.dev/chainguard/wolfi-base:latest
@@ -41,7 +29,7 @@ RUN apk add --no-cache ca-certificates curl && \
 
 WORKDIR /app
 
-COPY --from=builder /app/output/proxyd /app/proxyd
+COPY --from=builder /app/proxyd /app/proxyd
 
 RUN mkdir -p /data && chown -R proxyd:proxyd /data /app
 
