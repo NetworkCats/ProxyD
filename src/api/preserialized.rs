@@ -1,8 +1,9 @@
+use std::sync::LazyLock;
+
 use actix_web::body::BoxBody;
 use actix_web::http::header::ContentType;
 use actix_web::http::StatusCode;
 use actix_web::{HttpResponse, Responder};
-use once_cell::sync::Lazy;
 
 pub struct PreserializedJson {
     body: &'static [u8],
@@ -49,7 +50,7 @@ impl From<PreserializedJson> for HttpResponse {
     }
 }
 
-pub static HEALTH_OK: Lazy<&'static [u8]> = Lazy::new(|| {
+pub static HEALTH_OK: LazyLock<&'static [u8]> = LazyLock::new(|| {
     Box::leak(
         serde_json::json!({
             "status": "healthy",
@@ -61,7 +62,7 @@ pub static HEALTH_OK: Lazy<&'static [u8]> = Lazy::new(|| {
     )
 });
 
-pub static HEALTH_UNAVAILABLE: Lazy<&'static [u8]> = Lazy::new(|| {
+pub static HEALTH_UNAVAILABLE: LazyLock<&'static [u8]> = LazyLock::new(|| {
     Box::leak(
         serde_json::json!({
             "status": "unhealthy",
@@ -73,7 +74,7 @@ pub static HEALTH_UNAVAILABLE: Lazy<&'static [u8]> = Lazy::new(|| {
     )
 });
 
-pub static BATCH_SIZE_ERROR: Lazy<&'static [u8]> = Lazy::new(|| {
+pub static BATCH_SIZE_ERROR: LazyLock<&'static [u8]> = LazyLock::new(|| {
     Box::leak(
         serde_json::json!({
             "error": "Batch size exceeds maximum of 1000"
