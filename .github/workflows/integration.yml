@@ -94,6 +94,7 @@ jobs:
         if: matrix.mode == 'docker'
         run: |
           mkdir -p /tmp/proxyd-data
+          chmod 777 /tmp/proxyd-data
           docker run -d --name proxyd-test \
             -p 7891:7891 \
             -p 7892:7892 \
