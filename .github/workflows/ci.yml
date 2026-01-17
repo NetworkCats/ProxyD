@@ -4,13 +4,11 @@ on:
   push:
     branches: [main]
     paths-ignore:
-      - "*.md"
       - "LICENSE"
       - ".gitignore"
   pull_request:
     branches: [main]
     paths-ignore:
-      - "*.md"
       - "LICENSE"
       - ".gitignore"
 
@@ -22,6 +20,15 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  typos:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check spelling
+        uses: crate-ci/typos@v1
+
   fmt:
     runs-on: ubuntu-latest
     timeout-minutes: 5
