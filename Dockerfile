@@ -21,19 +21,12 @@ RUN touch src/main.rs && \
     cargo build --release && \
     cp /app/target/release/proxyd /app/proxyd
 
-# Runtime stage with Chainguard Wolfi base for minimal attack surface
-FROM cgr.dev/chainguard/wolfi-base:latest
-
-RUN apk add --no-cache ca-certificates curl && \
-    addgroup -S proxyd && adduser -S proxyd -G proxyd
+# Runtime stage with Chainguard glibc-dynamic for minimal footprint
+FROM cgr.dev/chainguard/glibc-dynamic:latest
 
 WORKDIR /app
 
-COPY --from=builder /app/proxyd /app/proxyd
-
-RUN mkdir -p /data && chown -R proxyd:proxyd /data /app
-
-USER proxyd
+COPY --from=builder --chown=65532:65532 /app/proxyd /app/proxyd
 
 ENV PROXYD_DATA_DIR=/data
 ENV RUST_LOG=proxyd=info
@@ -41,8 +34,5 @@ ENV RUST_LOG=proxyd=info
 EXPOSE 7891 7892
 
 VOLUME ["/data"]
-
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:7891/health || exit 1
 
 ENTRYPOINT ["/app/proxyd"]
