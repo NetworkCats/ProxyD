@@ -19,7 +19,8 @@ COPY src ./src
 
 RUN touch src/main.rs && \
     cargo build --release && \
-    cp /app/target/release/proxyd /app/proxyd
+    cp /app/target/release/proxyd /app/proxyd && \
+    mkdir -p /app/data
 
 # Runtime stage with Chainguard glibc-dynamic for minimal footprint
 FROM cgr.dev/chainguard/glibc-dynamic:latest
@@ -27,6 +28,7 @@ FROM cgr.dev/chainguard/glibc-dynamic:latest
 WORKDIR /app
 
 COPY --from=builder --chown=65532:65532 /app/proxyd /app/proxyd
+COPY --from=builder --chown=65532:65532 /app/data /data
 
 ENV PROXYD_DATA_DIR=/data
 ENV RUST_LOG=proxyd=info
