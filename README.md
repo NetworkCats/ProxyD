@@ -1,5 +1,7 @@
 # ProxyD
 
+[![CI](https://github.com/NetworkCats/ProxyD/actions/workflows/ci.yml/badge.svg)](https://github.com/NetworkCats/ProxyD/actions/workflows/ci.yml)
+
 IP reputation API service with gRPC and REST interfaces.
 
 ## Features
