@@ -101,9 +101,3 @@ jobs:
           docker buildx imagetools create -t "${IMAGE}:latest" \
             "${IMAGE}:${TAG}-amd64" \
             "${IMAGE}:${TAG}-arm64"
-
-      - name: Cleanup architecture-specific tags
-        run: |
-          echo "Architecture-specific tags created for debugging:"
-          echo "  - ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}-amd64"
-          echo "  - ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}-arm64"

@@ -3,40 +3,71 @@ name: Integration Tests
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "*.md"
+      - "LICENSE"
+      - ".gitignore"
   pull_request:
     branches: [main]
+    paths-ignore:
+      - "*.md"
+      - "LICENSE"
+      - ".gitignore"
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   integration:
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [native, docker]
+
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+
     steps:
       - uses: actions/checkout@v4
 
+      # Native mode setup
       - name: Install protobuf compiler
+        if: matrix.mode == 'native'
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
       - name: Install Rust toolchain
+        if: matrix.mode == 'native'
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
+        if: matrix.mode == 'native'
+        uses: Swatinem/rust-cache@v2
 
       - name: Build
+        if: matrix.mode == 'native'
         run: cargo build --release
 
+      # Docker mode setup
+      - name: Set up Docker Buildx
+        if: matrix.mode == 'docker'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        if: matrix.mode == 'docker'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: proxyd:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Common tool installation
       - name: Install grpcurl
         run: |
           curl -sSL https://github.com/fullstorydev/grpcurl/releases/download/v1.9.1/grpcurl_1.9.1_linux_x86_64.tar.gz | tar -xz
@@ -48,7 +79,9 @@ jobs:
           chmod +x hey
           sudo mv hey /usr/local/bin/
 
-      - name: Start service
+      # Start service (native)
+      - name: Start service (native)
+        if: matrix.mode == 'native'
         run: |
           mkdir -p /tmp/proxyd-data
           PROXYD_DATA_DIR=/tmp/proxyd-data ./target/release/proxyd &
@@ -56,6 +89,19 @@ jobs:
         env:
           RUST_LOG: proxyd=info
 
+      # Start service (docker)
+      - name: Start container (docker)
+        if: matrix.mode == 'docker'
+        run: |
+          mkdir -p /tmp/proxyd-data
+          docker run -d --name proxyd-test \
+            -p 7891:7891 \
+            -p 7892:7892 \
+            -v /tmp/proxyd-data:/data \
+            -e RUST_LOG=proxyd=info \
+            proxyd:test
+
+      # Wait for service
       - name: Wait for service readiness
         run: |
           for i in {1..60}; do
@@ -67,8 +113,12 @@ jobs:
             sleep 2
           done
           echo "Service failed to start"
+          if [ "${{ matrix.mode }}" = "docker" ]; then
+            docker logs proxyd-test
+          fi
           exit 1
 
+      # REST API tests
       - name: Test REST health endpoint
         run: |
           response=$(curl -sf http://localhost:7891/health)
@@ -94,18 +144,6 @@ jobs:
           echo "Range lookup response: $response"
           echo "$response" | jq -e '.query == "8.8.8.0/24"'
 
-      - name: Test gRPC LookupIP
-        run: |
-          response=$(grpcurl -plaintext -proto proto/proxyd.proto -d '{"ip": "8.8.8.8"}' localhost:7892 proxyd.ProxyD/LookupIP)
-          echo "gRPC LookupIP response: $response"
-          echo "$response" | jq -e '.query == "8.8.8.8"'
-
-      - name: Test gRPC LookupRange
-        run: |
-          response=$(grpcurl -plaintext -proto proto/proxyd.proto -d '{"cidr": "8.8.8.0/24"}' localhost:7892 proxyd.ProxyD/LookupRange)
-          echo "gRPC LookupRange response: $response"
-          echo "$response" | jq -e '.query == "8.8.8.0/24"'
-
       - name: Test REST batch IP lookup
         run: |
           response=$(curl -sf -X POST -H "Content-Type: application/json" -d '{"ips": ["8.8.8.8", "1.1.1.1"]}' http://localhost:7891/v1/ip/batch)
@@ -119,6 +157,19 @@ jobs:
           echo "Batch range lookup response: $response"
           echo "$response" | jq -e '.[0].query == "8.8.8.0/24"'
           echo "$response" | jq -e '.[1].query == "1.1.1.0/24"'
+
+      # gRPC API tests
+      - name: Test gRPC LookupIP
+        run: |
+          response=$(grpcurl -plaintext -proto proto/proxyd.proto -d '{"ip": "8.8.8.8"}' localhost:7892 proxyd.ProxyD/LookupIP)
+          echo "gRPC LookupIP response: $response"
+          echo "$response" | jq -e '.query == "8.8.8.8"'
+
+      - name: Test gRPC LookupRange
+        run: |
+          response=$(grpcurl -plaintext -proto proto/proxyd.proto -d '{"cidr": "8.8.8.0/24"}' localhost:7892 proxyd.ProxyD/LookupRange)
+          echo "gRPC LookupRange response: $response"
+          echo "$response" | jq -e '.query == "8.8.8.0/24"'
 
       - name: Test gRPC BatchLookupIP
         run: |
@@ -134,6 +185,7 @@ jobs:
           echo "$response" | jq -e '.results[0].query == "8.8.8.0/24"'
           echo "$response" | jq -e '.results[1].query == "1.1.1.0/24"'
 
+      # Load tests
       - name: Load test REST IP lookup
         run: |
           echo "Running load test: 100 requests, 10 concurrent"
@@ -144,9 +196,16 @@ jobs:
           echo "Running load test: 100 requests, 10 concurrent"
           hey -n 100 -c 10 "http://localhost:7891/v1/range?cidr=8.8.8.0/24"
 
-      - name: Stop service
-        if: always()
+      # Cleanup
+      - name: Stop service (native)
+        if: always() && matrix.mode == 'native'
         run: |
           if [ -f /tmp/proxyd.pid ]; then
             kill $(cat /tmp/proxyd.pid) 2>/dev/null || true
           fi
+
+      - name: Stop container (docker)
+        if: always() && matrix.mode == 'docker'
+        run: |
+          docker stop proxyd-test 2>/dev/null || true
+          docker rm proxyd-test 2>/dev/null || true
