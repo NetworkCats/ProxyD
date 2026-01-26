@@ -1,4 +1,4 @@
-name: Integration Tests
+name: End-to-End Testing
 
 on:
   push:
@@ -26,7 +26,7 @@ permissions:
   contents: read
 
 jobs:
-  integration:
+  e2e:
     strategy:
       fail-fast: false
       matrix:

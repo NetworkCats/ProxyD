@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use chrono::{Timelike, Utc};
 use tokio::time::{sleep, Duration as TokioDuration};
@@ -30,12 +31,14 @@ pub async fn run_scheduler(db: Arc<Database>, config: Config, cancel_token: Canc
     loop {
         if should_sync_now(config.sync_hour_utc, &mut last_sync_date) {
             info!("Starting scheduled sync at {} UTC", config.sync_hour_utc);
+            let start = Instant::now();
             if let Err(e) = perform_sync(&db, &config).await {
                 error!("Sync failed: {}", e);
-                metrics::SYNC_FAILURES.inc();
+                metrics::inc_sync_failures();
             } else {
-                metrics::SYNC_SUCCESS.inc();
+                metrics::inc_sync_success();
             }
+            metrics::record_sync_duration(start.elapsed().as_secs_f64());
         }
 
         tokio::select! {
@@ -72,9 +75,9 @@ pub async fn perform_sync(db: &Arc<Database>, config: &Config) -> Result<(), Str
 
     if let Ok(meta) = db.get_metadata() {
         #[allow(clippy::cast_possible_wrap)]
-        metrics::RECORD_COUNT.set(meta.record_count as i64);
+        metrics::set_record_count(meta.record_count as i64);
         if let Some(ts) = meta.last_sync {
-            metrics::LAST_SYNC_TIMESTAMP.set(ts);
+            metrics::set_last_sync_timestamp(ts);
         }
     }
 
@@ -107,9 +110,9 @@ pub async fn initial_sync(db: &Arc<Database>, config: &Config) -> Result<(), Str
 
     if let Ok(meta) = db.get_metadata() {
         #[allow(clippy::cast_possible_wrap)]
-        metrics::RECORD_COUNT.set(meta.record_count as i64);
+        metrics::set_record_count(meta.record_count as i64);
         if let Some(ts) = meta.last_sync {
-            metrics::LAST_SYNC_TIMESTAMP.set(ts);
+            metrics::set_last_sync_timestamp(ts);
         }
     }
 

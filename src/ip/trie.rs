@@ -1,28 +1,36 @@
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::IpAddr;
 
 use ipnetwork::IpNetwork;
+use smallvec::SmallVec;
 
 use super::ReputationFlags;
+
+pub type MatchVec = SmallVec<[(IpNetwork, ReputationFlags); 4]>;
 
 struct PatriciaNode {
     prefix_bits: u128,
     prefix_len: u8,
-    flags: Option<ReputationFlags>,
+    data: Option<(IpNetwork, ReputationFlags)>,
     children: [Option<Box<PatriciaNode>>; 2],
 }
 
 impl PatriciaNode {
-    fn new(prefix_bits: u128, prefix_len: u8, flags: Option<ReputationFlags>) -> Self {
+    fn new(prefix_bits: u128, prefix_len: u8) -> Self {
         Self {
             prefix_bits,
             prefix_len,
-            flags,
+            data: None,
             children: [None, None],
         }
     }
 
-    fn new_leaf(prefix_bits: u128, prefix_len: u8, flags: ReputationFlags) -> Self {
-        Self::new(prefix_bits, prefix_len, Some(flags))
+    fn new_leaf(prefix_bits: u128, prefix_len: u8, network: IpNetwork, flags: ReputationFlags) -> Self {
+        Self {
+            prefix_bits,
+            prefix_len,
+            data: Some((network, flags)),
+            children: [None, None],
+        }
     }
 }
 
@@ -50,12 +58,12 @@ impl IpTrie {
             IpNetwork::V4(n) => {
                 let bits = u128::from(u32::from(n.network()));
                 let prefix = n.prefix();
-                Self::insert_node(&mut self.v4_root, bits, prefix, 32, flags);
+                Self::insert_node(&mut self.v4_root, bits, prefix, 32, network, flags);
             }
             IpNetwork::V6(n) => {
                 let bits = u128::from(n.network());
                 let prefix = n.prefix();
-                Self::insert_node(&mut self.v6_root, bits, prefix, 128, flags);
+                Self::insert_node(&mut self.v6_root, bits, prefix, 128, network, flags);
             }
         }
     }
@@ -65,10 +73,11 @@ impl IpTrie {
         bits: u128,
         prefix_len: u8,
         total_bits: u8,
+        network: IpNetwork,
         flags: ReputationFlags,
     ) {
         if root.is_none() {
-            *root = Some(Box::new(PatriciaNode::new_leaf(bits, prefix_len, flags)));
+            *root = Some(Box::new(PatriciaNode::new_leaf(bits, prefix_len, network, flags)));
             return;
         }
 
@@ -81,7 +90,7 @@ impl IpTrie {
         );
 
         if common_len == node.prefix_len && common_len == prefix_len {
-            node.flags = Some(flags);
+            node.data = Some((network, flags));
             return;
         }
 
@@ -92,6 +101,7 @@ impl IpTrie {
                 bits,
                 prefix_len,
                 total_bits,
+                network,
                 flags,
             );
             return;
@@ -99,10 +109,10 @@ impl IpTrie {
 
         let old_node = root.take().unwrap();
         let common_prefix_bits = Self::mask_prefix(bits, common_len, total_bits);
-        let mut new_parent = Box::new(PatriciaNode::new(common_prefix_bits, common_len, None));
+        let mut new_parent = Box::new(PatriciaNode::new(common_prefix_bits, common_len));
 
         if common_len == prefix_len {
-            new_parent.flags = Some(flags);
+            new_parent.data = Some((network, flags));
             let old_bit = Self::get_bit(old_node.prefix_bits, common_len, total_bits);
             new_parent.children[old_bit] = Some(old_node);
         } else {
@@ -110,7 +120,7 @@ impl IpTrie {
             let old_bit = 1 - new_bit;
 
             new_parent.children[new_bit] =
-                Some(Box::new(PatriciaNode::new_leaf(bits, prefix_len, flags)));
+                Some(Box::new(PatriciaNode::new_leaf(bits, prefix_len, network, flags)));
             new_parent.children[old_bit] = Some(old_node);
         }
 
@@ -123,17 +133,14 @@ impl IpTrie {
         }
 
         let shift = total_bits.saturating_sub(max_len);
-        let a_prefix = a >> shift;
-        let b_prefix = b >> shift;
-        let diff = a_prefix ^ b_prefix;
+        let diff = (a >> shift) ^ (b >> shift);
 
         if diff == 0 {
             max_len
         } else {
             #[allow(clippy::cast_possible_truncation)]
             let leading = diff.leading_zeros() as u8;
-            let common_from_left = leading.saturating_sub(128 - max_len);
-            common_from_left.min(max_len)
+            leading.saturating_sub(128 - max_len).min(max_len)
         }
     }
 
@@ -154,12 +161,10 @@ impl IpTrie {
         }
     }
 
-    pub fn find_all_matches(&self, ip: IpAddr) -> Vec<(IpNetwork, ReputationFlags)> {
+    pub fn find_all_matches(&self, ip: IpAddr) -> MatchVec {
         match ip {
-            IpAddr::V4(v4) => {
-                self.find_matches_impl(&self.v4_root, u128::from(u32::from(v4)), 32, true)
-            }
-            IpAddr::V6(v6) => self.find_matches_impl(&self.v6_root, u128::from(v6), 128, false),
+            IpAddr::V4(v4) => self.find_matches_impl(&self.v4_root, u128::from(u32::from(v4)), 32),
+            IpAddr::V6(v6) => self.find_matches_impl(&self.v6_root, u128::from(v6), 128),
         }
     }
 
@@ -169,9 +174,8 @@ impl IpTrie {
         root: &Option<Box<PatriciaNode>>,
         ip_bits: u128,
         total_bits: u8,
-        is_v4: bool,
-    ) -> Vec<(IpNetwork, ReputationFlags)> {
-        let mut matches = Vec::new();
+    ) -> MatchVec {
+        let mut matches = MatchVec::new();
         let mut current = root;
 
         while let Some(node) = current {
@@ -181,12 +185,8 @@ impl IpTrie {
                 break;
             }
 
-            if let Some(ref flags) = node.flags {
-                if let Some(network) =
-                    Self::bits_to_network(node.prefix_bits, node.prefix_len, total_bits, is_v4)
-                {
-                    matches.push((network, *flags));
-                }
+            if let Some((network, flags)) = &node.data {
+                matches.push((*network, *flags));
             }
 
             if node.prefix_len >= total_bits {
@@ -198,30 +198,6 @@ impl IpTrie {
         }
 
         matches
-    }
-
-    #[allow(clippy::cast_possible_truncation)]
-    fn bits_to_network(
-        bits: u128,
-        prefix_len: u8,
-        total_bits: u8,
-        is_v4: bool,
-    ) -> Option<IpNetwork> {
-        if is_v4 {
-            let shift = total_bits.saturating_sub(prefix_len);
-            let masked = (bits >> shift) << shift;
-            let addr = Ipv4Addr::from(masked as u32);
-            IpNetwork::new(IpAddr::V4(addr), prefix_len).ok()
-        } else {
-            let shift = total_bits.saturating_sub(prefix_len);
-            let masked = if shift >= 128 {
-                0
-            } else {
-                (bits >> shift) << shift
-            };
-            let addr = Ipv6Addr::from(masked);
-            IpNetwork::new(IpAddr::V6(addr), prefix_len).ok()
-        }
     }
 }
 

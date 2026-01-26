@@ -4,6 +4,7 @@ use actix_web::body::BoxBody;
 use actix_web::http::header::ContentType;
 use actix_web::http::StatusCode;
 use actix_web::{HttpResponse, Responder};
+use bytes::Bytes;
 
 pub struct PreserializedJson {
     body: &'static [u8],
@@ -40,7 +41,7 @@ impl PreserializedJson {
     fn into_response(self) -> HttpResponse<BoxBody> {
         HttpResponse::build(self.status)
             .content_type(ContentType::json())
-            .body(self.body.to_vec())
+            .body(Bytes::from_static(self.body))
     }
 }
 

@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::warn;
 
-use crate::ip::{IpTrie, ReputationFlags};
+use crate::ip::{IpTrie, MatchVec, ReputationFlags};
 
 #[derive(Error, Debug)]
 pub enum DbError {
@@ -97,7 +97,7 @@ impl Database {
         self.cidr_trie.store(Arc::new(new_trie));
     }
 
-    pub fn find_matching_cidrs_fast(&self, ip: IpAddr) -> Vec<(IpNetwork, ReputationFlags)> {
+    pub fn find_matching_cidrs_fast(&self, ip: IpAddr) -> MatchVec {
         self.cidr_trie.load().find_all_matches(ip)
     }
 

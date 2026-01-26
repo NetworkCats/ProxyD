@@ -5,15 +5,19 @@ mod ip;
 mod metrics;
 mod sync;
 
+use mimalloc::MiMalloc;
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
+
 use std::sync::Arc;
 
 use actix_web::{web, App, HttpServer};
 use tokio_util::sync::CancellationToken;
-use tonic::transport::Server as TonicServer;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
-use api::grpc::ProxyDService;
+use api::grpc::{configure_server, create_reflection_service, GrpcServerConfig, ProxyDService};
 use api::rest::{configure, AppState};
 use config::Config;
 use db::Database;
@@ -33,10 +37,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let db = Database::open(&config.db_path())?;
 
-    metrics::register_metrics();
+    metrics::init_metrics();
 
     if let Err(e) = initial_sync(&db, &config).await {
         error!("Initial sync failed: {}", e);
+        metrics::set_health_status(false);
+    } else {
+        metrics::set_health_status(true);
     }
 
     let db_for_rest = Arc::clone(&db);
@@ -55,9 +62,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let grpc_service = ProxyDService::new(db_for_grpc);
 
     let grpc_token = shutdown_token.clone();
+    let grpc_config = GrpcServerConfig::default();
+    let reflection_service = create_reflection_service();
     let grpc_handle = tokio::spawn(async move {
         info!("gRPC server listening on {}", grpc_addr);
-        if let Err(e) = TonicServer::builder()
+        if let Err(e) = configure_server(&grpc_config)
+            .add_service(reflection_service)
             .add_service(grpc_service.into_server())
             .serve_with_shutdown(grpc_addr, grpc_token.cancelled())
             .await

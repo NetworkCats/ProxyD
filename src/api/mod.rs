@@ -13,16 +13,14 @@ pub struct LookupMetrics {
 
 impl LookupMetrics {
     pub fn start_rest() -> Self {
-        metrics::REST_REQUESTS.inc();
-        metrics::LOOKUP_REQUESTS.inc();
+        metrics::inc_rest_requests();
         Self {
             start: Instant::now(),
         }
     }
 
     pub fn start_grpc() -> Self {
-        metrics::GRPC_REQUESTS.inc();
-        metrics::LOOKUP_REQUESTS.inc();
+        metrics::inc_grpc_requests();
         Self {
             start: Instant::now(),
         }
@@ -30,17 +28,17 @@ impl LookupMetrics {
 
     pub fn record(&self, result: &LookupResult) {
         let elapsed = self.start.elapsed().as_secs_f64();
-        metrics::LOOKUP_LATENCY.observe(elapsed);
+        metrics::record_lookup_latency(elapsed);
         if result.found {
-            metrics::LOOKUP_HITS.inc();
+            metrics::inc_lookup_hits();
         }
     }
 
     pub fn record_batch(&self, any_found: bool) {
         let elapsed = self.start.elapsed().as_secs_f64();
-        metrics::LOOKUP_LATENCY.observe(elapsed);
+        metrics::record_lookup_latency(elapsed);
         if any_found {
-            metrics::LOOKUP_HITS.inc();
+            metrics::inc_lookup_hits();
         }
     }
 }

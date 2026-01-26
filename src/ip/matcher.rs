@@ -2,6 +2,7 @@ use std::net::IpAddr;
 use std::sync::Arc;
 
 use ipnetwork::IpNetwork;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -133,34 +134,38 @@ pub fn lookup_ips_batch(
 
     let db_results = db.lookup_ips_batch(&ips)?;
 
-    let mut results = Vec::with_capacity(ips.len());
-    for (i, ip) in ips.iter().enumerate() {
-        let mut matched_entries = Vec::new();
-        let mut merged_flags = ReputationFlags::default();
+    let results: Vec<LookupResult> = ips
+        .par_iter()
+        .zip(db_results.par_iter())
+        .zip(ip_strs.par_iter())
+        .map(|((ip, db_result), query)| {
+            let mut matched_entries = Vec::new();
+            let mut merged_flags = ReputationFlags::default();
 
-        if let Some(flags) = db_results[i] {
-            matched_entries.push(MatchedEntry {
-                entry: ip.to_string(),
-                flags,
-            });
-            merged_flags = merged_flags.merge(&flags);
-        }
+            if let Some(flags) = db_result {
+                matched_entries.push(MatchedEntry {
+                    entry: ip.to_string(),
+                    flags: *flags,
+                });
+                merged_flags = merged_flags.merge(flags);
+            }
 
-        for (network, flags) in db.find_matching_cidrs_fast(*ip) {
-            matched_entries.push(MatchedEntry {
-                entry: network.to_string(),
-                flags,
-            });
-            merged_flags = merged_flags.merge(&flags);
-        }
+            for (network, flags) in db.find_matching_cidrs_fast(*ip) {
+                matched_entries.push(MatchedEntry {
+                    entry: network.to_string(),
+                    flags,
+                });
+                merged_flags = merged_flags.merge(&flags);
+            }
 
-        results.push(LookupResult {
-            found: !matched_entries.is_empty(),
-            query: ip_strs[i].to_owned(),
-            flags: merged_flags,
-            matched_entries,
-        });
-    }
+            LookupResult {
+                found: !matched_entries.is_empty(),
+                query: (*query).to_owned(),
+                flags: merged_flags,
+                matched_entries,
+            }
+        })
+        .collect();
 
     Ok(results)
 }
@@ -179,28 +184,32 @@ pub fn lookup_ranges_batch(
 
     let db_results = db.lookup_cidrs_batch(&networks)?;
 
-    let mut results = Vec::with_capacity(networks.len());
-    for (i, network) in networks.iter().enumerate() {
-        let mut matched_entries = Vec::new();
+    let results: Vec<LookupResult> = networks
+        .par_iter()
+        .zip(db_results.par_iter())
+        .zip(cidr_strs.par_iter())
+        .map(|((network, db_result), query)| {
+            let mut matched_entries = Vec::new();
 
-        if let Some(flags) = db_results[i] {
-            matched_entries.push(MatchedEntry {
-                entry: network.to_string(),
-                flags,
-            });
-        }
+            if let Some(flags) = db_result {
+                matched_entries.push(MatchedEntry {
+                    entry: network.to_string(),
+                    flags: *flags,
+                });
+            }
 
-        let merged_flags = matched_entries
-            .iter()
-            .fold(ReputationFlags::default(), |acc, e| acc.merge(&e.flags));
+            let merged_flags = matched_entries
+                .iter()
+                .fold(ReputationFlags::default(), |acc, e| acc.merge(&e.flags));
 
-        results.push(LookupResult {
-            found: !matched_entries.is_empty(),
-            query: cidr_strs[i].to_owned(),
-            flags: merged_flags,
-            matched_entries,
-        });
-    }
+            LookupResult {
+                found: !matched_entries.is_empty(),
+                query: (*query).to_owned(),
+                flags: merged_flags,
+                matched_entries,
+            }
+        })
+        .collect();
 
     Ok(results)
 }
