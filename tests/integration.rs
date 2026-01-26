@@ -540,7 +540,11 @@ mod trie_tests {
 
         let result = proxyd::ip::lookup_ip(&ctx.db, "10.10.10.5").unwrap();
         assert!(result.found);
-        assert_eq!(result.matched_entries.len(), 3, "expected all 3 CIDRs to match");
+        assert_eq!(
+            result.matched_entries.len(),
+            3,
+            "expected all 3 CIDRs to match"
+        );
         assert!(result.flags.anonblock);
         assert!(result.flags.proxy);
         assert!(result.flags.vpn);
@@ -603,7 +607,10 @@ mod error_tests {
 
         let mut txn = ctx.db.begin_write().unwrap();
         let deleted = ctx.db.delete_record(&mut txn, "192.168.1.1").unwrap();
-        assert!(!deleted, "expected delete to return false for nonexistent record");
+        assert!(
+            !deleted,
+            "expected delete to return false for nonexistent record"
+        );
         txn.commit().unwrap();
     }
 }

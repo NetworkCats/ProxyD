@@ -26,8 +26,7 @@ pub mod proto {
     )]
     tonic::include_proto!("proxyd");
 
-    pub const FILE_DESCRIPTOR_SET: &[u8] =
-        tonic::include_file_descriptor_set!("proxyd_descriptor");
+    pub const FILE_DESCRIPTOR_SET: &[u8] = tonic::include_file_descriptor_set!("proxyd_descriptor");
 }
 
 use proto::proxy_d_server::{ProxyD, ProxyDServer};

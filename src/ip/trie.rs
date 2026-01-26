@@ -24,7 +24,12 @@ impl PatriciaNode {
         }
     }
 
-    fn new_leaf(prefix_bits: u128, prefix_len: u8, network: IpNetwork, flags: ReputationFlags) -> Self {
+    fn new_leaf(
+        prefix_bits: u128,
+        prefix_len: u8,
+        network: IpNetwork,
+        flags: ReputationFlags,
+    ) -> Self {
         Self {
             prefix_bits,
             prefix_len,
@@ -77,7 +82,9 @@ impl IpTrie {
         flags: ReputationFlags,
     ) {
         if root.is_none() {
-            *root = Some(Box::new(PatriciaNode::new_leaf(bits, prefix_len, network, flags)));
+            *root = Some(Box::new(PatriciaNode::new_leaf(
+                bits, prefix_len, network, flags,
+            )));
             return;
         }
 
@@ -119,8 +126,9 @@ impl IpTrie {
             let new_bit = Self::get_bit(bits, common_len, total_bits);
             let old_bit = 1 - new_bit;
 
-            new_parent.children[new_bit] =
-                Some(Box::new(PatriciaNode::new_leaf(bits, prefix_len, network, flags)));
+            new_parent.children[new_bit] = Some(Box::new(PatriciaNode::new_leaf(
+                bits, prefix_len, network, flags,
+            )));
             new_parent.children[old_bit] = Some(old_node);
         }
 
