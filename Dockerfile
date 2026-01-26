@@ -12,6 +12,7 @@ COPY proto ./proto
 
 RUN mkdir src && \
     echo "fn main() {}" > src/main.rs && \
+    echo "" > src/lib.rs && \
     cargo build --release && \
     rm -rf src
 
