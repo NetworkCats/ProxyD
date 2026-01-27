@@ -4,6 +4,10 @@
 [![CodeQL](https://github.com/NetworkCats/ProxyD/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/NetworkCats/ProxyD/actions/workflows/github-code-scanning/codeql/)
 [![codecov](https://codecov.io/gh/NetworkCats/ProxyD/branch/main/graph/badge.svg)](https://codecov.io/gh/NetworkCats/ProxyD)
 
+![Docker Pulls](https://img.shields.io/docker/pulls/networkcat/proxyd)
+![Docker Image Size](https://img.shields.io/docker/image-size/networkcat/proxyd)
+![Docker Image Version (tag)](https://img.shields.io/docker/v/networkcat/proxyd/latest)
+
 IP reputation API service with gRPC and REST interfaces.
 
 ## Features
