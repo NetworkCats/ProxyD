@@ -2,15 +2,26 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use chrono::{Duration, Utc};
+use thiserror::Error;
 use tokio::time::{sleep, Duration as TokioDuration};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
 use crate::config::Config;
-use crate::db::{Database, Metadata};
+use crate::db::{Database, DbError, Metadata};
 use crate::metrics;
-use crate::sync::downloader::{download_csv, load_hash};
-use crate::sync::importer::{full_import, incremental_import};
+use crate::sync::downloader::{download_csv, load_hash, DownloadError};
+use crate::sync::importer::{full_import, incremental_import, ImportError};
+
+#[derive(Error, Debug)]
+pub enum SyncError {
+    #[error("Download failed: {0}")]
+    Download(#[from] DownloadError),
+    #[error("Import failed: {0}")]
+    Import(#[from] ImportError),
+    #[error("Database error: {0}")]
+    Database(#[from] DbError),
+}
 
 fn duration_until_next_sync(target_hour: u8) -> TokioDuration {
     let now = Utc::now();
@@ -69,24 +80,18 @@ pub async fn run_scheduler(db: Arc<Database>, config: Config, cancel_token: Canc
     }
 }
 
-pub async fn perform_sync(db: &Arc<Database>, config: &Config) -> Result<(), String> {
+pub async fn perform_sync(db: &Arc<Database>, config: &Config) -> Result<(), SyncError> {
     info!("Starting scheduled sync");
 
-    let result = download_csv(&config.csv_url)
-        .await
-        .map_err(|e| e.to_string())?;
+    let result = download_csv(&config.csv_url).await?;
 
     let current_hash = load_hash(&config.csv_hash_path()).await;
-    let is_first_run = db.is_empty().unwrap_or(true);
+    let is_first_run = db.is_empty()?;
 
     if is_first_run {
-        full_import(db, &result.content, &result.hash, config)
-            .await
-            .map_err(|e| e.to_string())?;
+        full_import(db, &result.content, &result.hash, config).await?;
     } else if current_hash.as_ref() != Some(&result.hash) {
-        incremental_import(db, &result.content, &result.hash, config)
-            .await
-            .map_err(|e| e.to_string())?;
+        incremental_import(db, &result.content, &result.hash, config).await?;
     } else {
         info!("CSV unchanged, skipping import");
     }
@@ -98,25 +103,19 @@ pub async fn perform_sync(db: &Arc<Database>, config: &Config) -> Result<(), Str
     Ok(())
 }
 
-pub async fn initial_sync(db: &Arc<Database>, config: &Config) -> Result<(), String> {
+pub async fn initial_sync(db: &Arc<Database>, config: &Config) -> Result<(), SyncError> {
     info!("Performing initial sync");
 
-    let is_empty = db.is_empty().unwrap_or(true);
+    let is_empty = db.is_empty()?;
 
     if is_empty {
         if config.csv_path().exists() {
             info!("Database empty but local CSV exists, rebuilding from CSV");
-            crate::sync::rebuild_from_csv(db, config)
-                .await
-                .map_err(|e| e.to_string())?;
+            crate::sync::rebuild_from_csv(db, config).await?;
         } else {
             info!("First run, downloading CSV");
-            let result = download_csv(&config.csv_url)
-                .await
-                .map_err(|e| e.to_string())?;
-            full_import(db, &result.content, &result.hash, config)
-                .await
-                .map_err(|e| e.to_string())?;
+            let result = download_csv(&config.csv_url).await?;
+            full_import(db, &result.content, &result.hash, config).await?;
         }
     } else {
         info!("Database already populated, skipping initial sync");
