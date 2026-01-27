@@ -6,11 +6,13 @@ on:
     paths-ignore:
       - "LICENSE"
       - ".gitignore"
+      - "*.md"
   pull_request:
     branches: [main]
     paths-ignore:
       - "LICENSE"
       - ".gitignore"
+      - "*.md"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
