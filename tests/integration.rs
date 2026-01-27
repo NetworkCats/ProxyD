@@ -264,6 +264,122 @@ mod database_tests {
         let ctx = TestContext::new();
         assert!(ctx.db.is_healthy());
     }
+
+    #[test]
+    fn update_existing_record() {
+        let ctx = TestContext::new();
+
+        let original_flags = proxyd::ip::ReputationFlags {
+            proxy: true,
+            vpn: false,
+            ..Default::default()
+        };
+        ctx.insert_ip("192.168.1.1", original_flags);
+
+        let result = proxyd::ip::lookup_ip(&ctx.db, "192.168.1.1").unwrap();
+        assert!(result.flags.proxy);
+        assert!(!result.flags.vpn);
+
+        let updated_flags = proxyd::ip::ReputationFlags {
+            proxy: false,
+            vpn: true,
+            tor: true,
+            ..Default::default()
+        };
+        ctx.insert_ip("192.168.1.1", updated_flags);
+
+        let result = proxyd::ip::lookup_ip(&ctx.db, "192.168.1.1").unwrap();
+        assert!(!result.flags.proxy, "proxy flag should be updated to false");
+        assert!(result.flags.vpn, "vpn flag should be updated to true");
+        assert!(result.flags.tor, "tor flag should be updated to true");
+    }
+
+    #[test]
+    fn delete_cidr_record_v4() {
+        let ctx = TestContext::new();
+
+        ctx.insert_cidr(
+            "10.0.0.0/8",
+            proxyd::ip::ReputationFlags {
+                cdn: true,
+                ..Default::default()
+            },
+        );
+
+        assert!(proxyd::ip::lookup_ip(&ctx.db, "10.1.2.3").unwrap().found);
+
+        {
+            let mut txn = ctx.db.begin_write().unwrap();
+            let deleted = ctx.db.delete_record(&mut txn, "10.0.0.0/8").unwrap();
+            assert!(deleted, "expected CIDR to be deleted");
+            txn.commit().unwrap();
+            ctx.db.rebuild_trie().unwrap();
+        }
+
+        assert!(
+            !proxyd::ip::lookup_ip(&ctx.db, "10.1.2.3").unwrap().found,
+            "IP should not match after CIDR deletion"
+        );
+    }
+
+    #[test]
+    fn delete_cidr_record_v6() {
+        let ctx = TestContext::new();
+
+        ctx.insert_cidr(
+            "2001:db8::/32",
+            proxyd::ip::ReputationFlags {
+                tor: true,
+                ..Default::default()
+            },
+        );
+
+        assert!(proxyd::ip::lookup_ip(&ctx.db, "2001:db8::1").unwrap().found);
+
+        {
+            let mut txn = ctx.db.begin_write().unwrap();
+            let deleted = ctx.db.delete_record(&mut txn, "2001:db8::/32").unwrap();
+            assert!(deleted, "expected IPv6 CIDR to be deleted");
+            txn.commit().unwrap();
+            ctx.db.rebuild_trie().unwrap();
+        }
+
+        assert!(
+            !proxyd::ip::lookup_ip(&ctx.db, "2001:db8::1").unwrap().found,
+            "IPv6 should not match after CIDR deletion"
+        );
+    }
+
+    #[test]
+    fn is_empty_after_operations() {
+        let ctx = TestContext::new();
+
+        assert!(ctx.db.is_empty().unwrap(), "fresh database should be empty");
+
+        ctx.insert_ip(
+            "1.2.3.4",
+            proxyd::ip::ReputationFlags {
+                proxy: true,
+                ..Default::default()
+            },
+        );
+
+        assert!(
+            !ctx.db.is_empty().unwrap(),
+            "database should not be empty after insert"
+        );
+
+        {
+            let mut txn = ctx.db.begin_write().unwrap();
+            ctx.db.clear_all(&mut txn).unwrap();
+            txn.commit().unwrap();
+        }
+
+        assert!(
+            ctx.db.is_empty().unwrap(),
+            "database should be empty after clear"
+        );
+    }
 }
 
 mod batch_tests {
@@ -561,6 +677,79 @@ mod trie_tests {
         assert_eq!(result.matched_entries.len(), 1);
         assert!(result.flags.anonblock);
     }
+
+    #[test]
+    fn adjacent_non_overlapping_cidrs() {
+        let ctx = TestContext::new();
+
+        ctx.insert_records(&[
+            (
+                "10.0.0.0/9",
+                proxyd::ip::ReputationFlags {
+                    proxy: true,
+                    ..Default::default()
+                },
+            ),
+            (
+                "10.128.0.0/9",
+                proxyd::ip::ReputationFlags {
+                    vpn: true,
+                    ..Default::default()
+                },
+            ),
+        ]);
+
+        // First half of 10.0.0.0/8
+        let result = proxyd::ip::lookup_ip(&ctx.db, "10.64.0.1").unwrap();
+        assert!(result.found);
+        assert!(result.flags.proxy);
+        assert!(!result.flags.vpn);
+
+        // Second half of 10.0.0.0/8
+        let result = proxyd::ip::lookup_ip(&ctx.db, "10.192.0.1").unwrap();
+        assert!(result.found);
+        assert!(!result.flags.proxy);
+        assert!(result.flags.vpn);
+    }
+
+    #[test]
+    fn host_routes_v4_and_v6() {
+        let ctx = TestContext::new();
+
+        // /32 for IPv4 (single host)
+        ctx.insert_records(&[
+            (
+                "192.168.1.1/32",
+                proxyd::ip::ReputationFlags {
+                    proxy: true,
+                    ..Default::default()
+                },
+            ),
+            (
+                "2001:db8::1/128",
+                proxyd::ip::ReputationFlags {
+                    tor: true,
+                    ..Default::default()
+                },
+            ),
+        ]);
+
+        let result = proxyd::ip::lookup_ip(&ctx.db, "192.168.1.1").unwrap();
+        assert!(result.found);
+        assert!(result.flags.proxy);
+
+        // Should NOT match adjacent IP
+        let result = proxyd::ip::lookup_ip(&ctx.db, "192.168.1.2").unwrap();
+        assert!(!result.found);
+
+        let result = proxyd::ip::lookup_ip(&ctx.db, "2001:db8::1").unwrap();
+        assert!(result.found);
+        assert!(result.flags.tor);
+
+        // Should NOT match adjacent IPv6
+        let result = proxyd::ip::lookup_ip(&ctx.db, "2001:db8::2").unwrap();
+        assert!(!result.found);
+    }
 }
 
 mod error_tests {
@@ -785,5 +974,171 @@ mod flags_tests {
         assert!(!result.flags.public_wifi);
         assert!(!result.flags.rangeblock);
         assert!(!result.flags.school_block);
+    }
+}
+
+mod mixed_ipv4_ipv6_tests {
+    use super::*;
+
+    #[test]
+    fn batch_mixed_v4_v6() {
+        let ctx = TestContext::new();
+
+        ctx.insert_records(&[
+            (
+                "192.168.1.1",
+                proxyd::ip::ReputationFlags {
+                    proxy: true,
+                    ..Default::default()
+                },
+            ),
+            (
+                "2001:db8::1",
+                proxyd::ip::ReputationFlags {
+                    tor: true,
+                    ..Default::default()
+                },
+            ),
+            (
+                "10.0.0.0/8",
+                proxyd::ip::ReputationFlags {
+                    cdn: true,
+                    ..Default::default()
+                },
+            ),
+            (
+                "fe80::/10",
+                proxyd::ip::ReputationFlags {
+                    vpn: true,
+                    ..Default::default()
+                },
+            ),
+        ]);
+
+        let ips = vec![
+            "192.168.1.1",
+            "2001:db8::1",
+            "10.50.0.1",
+            "fe80::1234",
+            "8.8.8.8",
+            "::1",
+        ];
+        let results = proxyd::ip::lookup_ips_batch(&ctx.db, &ips).unwrap();
+
+        assert_eq!(results.len(), 6);
+        assert!(results[0].found && results[0].flags.proxy);
+        assert!(results[1].found && results[1].flags.tor);
+        assert!(results[2].found && results[2].flags.cdn);
+        assert!(results[3].found && results[3].flags.vpn);
+        assert!(!results[4].found);
+        assert!(!results[5].found);
+    }
+
+    #[test]
+    fn mixed_get_all_entries() {
+        let ctx = TestContext::new();
+
+        ctx.insert_records(&[
+            (
+                "1.2.3.4",
+                proxyd::ip::ReputationFlags {
+                    proxy: true,
+                    ..Default::default()
+                },
+            ),
+            (
+                "10.0.0.0/8",
+                proxyd::ip::ReputationFlags {
+                    cdn: true,
+                    ..Default::default()
+                },
+            ),
+            (
+                "2001:db8::1",
+                proxyd::ip::ReputationFlags {
+                    tor: true,
+                    ..Default::default()
+                },
+            ),
+            (
+                "fe80::/10",
+                proxyd::ip::ReputationFlags {
+                    vpn: true,
+                    ..Default::default()
+                },
+            ),
+        ]);
+
+        let entries = ctx.db.get_all_entries().unwrap();
+        assert_eq!(entries.len(), 4);
+
+        let has_ipv4 = entries.iter().any(|(s, _)| s == "1.2.3.4");
+        let has_ipv4_cidr = entries.iter().any(|(s, _)| s == "10.0.0.0/8");
+        let has_ipv6 = entries.iter().any(|(s, _)| s == "2001:db8::1");
+        let has_ipv6_cidr = entries.iter().any(|(s, _)| s == "fe80::/10");
+
+        assert!(has_ipv4, "should contain IPv4 address");
+        assert!(has_ipv4_cidr, "should contain IPv4 CIDR");
+        assert!(has_ipv6, "should contain IPv6 address");
+        assert!(has_ipv6_cidr, "should contain IPv6 CIDR");
+    }
+}
+
+mod range_lookup_tests {
+    use super::*;
+
+    #[test]
+    fn exact_cidr_lookup() {
+        let ctx = TestContext::new();
+
+        ctx.insert_records(&[
+            (
+                "10.0.0.0/8",
+                proxyd::ip::ReputationFlags {
+                    proxy: true,
+                    ..Default::default()
+                },
+            ),
+            (
+                "192.168.0.0/16",
+                proxyd::ip::ReputationFlags {
+                    vpn: true,
+                    ..Default::default()
+                },
+            ),
+        ]);
+
+        // Exact match
+        let result = proxyd::ip::lookup_range(&ctx.db, "10.0.0.0/8").unwrap();
+        assert!(result.found);
+        assert!(result.flags.proxy);
+
+        // Different prefix length - not an exact match
+        let result = proxyd::ip::lookup_range(&ctx.db, "10.0.0.0/16").unwrap();
+        assert!(!result.found);
+
+        // Non-existent CIDR
+        let result = proxyd::ip::lookup_range(&ctx.db, "172.16.0.0/12").unwrap();
+        assert!(!result.found);
+    }
+
+    #[test]
+    fn ipv6_cidr_lookup() {
+        let ctx = TestContext::new();
+
+        ctx.insert_cidr(
+            "2001:db8::/32",
+            proxyd::ip::ReputationFlags {
+                tor: true,
+                ..Default::default()
+            },
+        );
+
+        let result = proxyd::ip::lookup_range(&ctx.db, "2001:db8::/32").unwrap();
+        assert!(result.found);
+        assert!(result.flags.tor);
+
+        let result = proxyd::ip::lookup_range(&ctx.db, "2001:db8::/48").unwrap();
+        assert!(!result.found);
     }
 }

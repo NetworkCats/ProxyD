@@ -1,48 +1,66 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use chrono::{Timelike, Utc};
+use chrono::{Duration, Utc};
 use tokio::time::{sleep, Duration as TokioDuration};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
 use crate::config::Config;
-use crate::db::Database;
+use crate::db::{Database, Metadata};
 use crate::metrics;
 use crate::sync::downloader::{download_csv, load_hash};
 use crate::sync::importer::{full_import, incremental_import};
 
-const CHECK_INTERVAL_SECS: u64 = 60;
-
-fn should_sync_now(target_hour: u8, last_sync_date: &mut Option<chrono::NaiveDate>) -> bool {
+fn duration_until_next_sync(target_hour: u8) -> TokioDuration {
     let now = Utc::now();
-    let today = now.date_naive();
+    let target_hour = u32::from(target_hour);
 
-    if now.hour() == u32::from(target_hour) && *last_sync_date != Some(today) {
-        *last_sync_date = Some(today);
-        return true;
+    let today_target = now
+        .date_naive()
+        .and_hms_opt(target_hour, 0, 0)
+        .expect("valid time");
+    let today_target = today_target.and_utc();
+
+    let next_sync = if now.naive_utc() < today_target.naive_utc() {
+        today_target
+    } else {
+        today_target + Duration::days(1)
+    };
+
+    let duration_secs = (next_sync - now).num_seconds().max(0) as u64;
+    TokioDuration::from_secs(duration_secs)
+}
+
+fn update_metrics_from_db(meta: &Metadata) {
+    #[allow(clippy::cast_possible_wrap)]
+    metrics::set_record_count(meta.record_count as i64);
+    if let Some(ts) = meta.last_sync {
+        metrics::set_last_sync_timestamp(ts);
     }
-    false
 }
 
 pub async fn run_scheduler(db: Arc<Database>, config: Config, cancel_token: CancellationToken) {
-    let mut last_sync_date: Option<chrono::NaiveDate> = None;
-
     loop {
-        if should_sync_now(config.sync_hour_utc, &mut last_sync_date) {
-            info!("Starting scheduled sync at {} UTC", config.sync_hour_utc);
-            let start = Instant::now();
-            if let Err(e) = perform_sync(&db, &config).await {
-                error!("Sync failed: {}", e);
-                metrics::inc_sync_failures();
-            } else {
-                metrics::inc_sync_success();
-            }
-            metrics::record_sync_duration(start.elapsed().as_secs_f64());
-        }
+        let sleep_duration = duration_until_next_sync(config.sync_hour_utc);
+        info!(
+            "Next sync scheduled in {} hours {} minutes",
+            sleep_duration.as_secs() / 3600,
+            (sleep_duration.as_secs() % 3600) / 60
+        );
 
         tokio::select! {
-            () = sleep(TokioDuration::from_secs(CHECK_INTERVAL_SECS)) => {}
+            () = sleep(sleep_duration) => {
+                info!("Starting scheduled sync at {} UTC", config.sync_hour_utc);
+                let start = Instant::now();
+                if let Err(e) = perform_sync(&db, &config).await {
+                    error!("Sync failed: {}", e);
+                    metrics::inc_sync_failures();
+                } else {
+                    metrics::inc_sync_success();
+                }
+                metrics::record_sync_duration(start.elapsed().as_secs_f64());
+            }
             () = cancel_token.cancelled() => {
                 info!("Scheduler received shutdown signal");
                 break;
@@ -74,11 +92,7 @@ pub async fn perform_sync(db: &Arc<Database>, config: &Config) -> Result<(), Str
     }
 
     if let Ok(meta) = db.get_metadata() {
-        #[allow(clippy::cast_possible_wrap)]
-        metrics::set_record_count(meta.record_count as i64);
-        if let Some(ts) = meta.last_sync {
-            metrics::set_last_sync_timestamp(ts);
-        }
+        update_metrics_from_db(&meta);
     }
 
     Ok(())
@@ -109,11 +123,7 @@ pub async fn initial_sync(db: &Arc<Database>, config: &Config) -> Result<(), Str
     }
 
     if let Ok(meta) = db.get_metadata() {
-        #[allow(clippy::cast_possible_wrap)]
-        metrics::set_record_count(meta.record_count as i64);
-        if let Some(ts) = meta.last_sync {
-            metrics::set_last_sync_timestamp(ts);
-        }
+        update_metrics_from_db(&meta);
     }
 
     Ok(())
@@ -121,19 +131,22 @@ pub async fn initial_sync(db: &Arc<Database>, config: &Config) -> Result<(), Str
 
 #[cfg(test)]
 mod tests {
+    use chrono::Timelike;
+
     use super::*;
 
     #[test]
+    fn test_duration_until_next_sync_returns_valid_duration() {
+        let duration = duration_until_next_sync(3);
+        assert!(duration.as_secs() <= 24 * 60 * 60);
+    }
+
+    #[test]
     #[allow(clippy::cast_possible_truncation)]
-    fn test_should_sync_now() {
-        let mut last_sync_date = None;
+    fn test_duration_until_next_sync_same_hour_schedules_tomorrow() {
         let current_hour = Utc::now().hour() as u8;
-
-        let should_sync = should_sync_now(current_hour, &mut last_sync_date);
-        assert!(should_sync);
-        assert!(last_sync_date.is_some());
-
-        let should_sync_again = should_sync_now(current_hour, &mut last_sync_date);
-        assert!(!should_sync_again);
+        let duration = duration_until_next_sync(current_hour);
+        // Should be close to 24 hours (minus a few seconds that elapsed)
+        assert!(duration.as_secs() >= 23 * 60 * 60);
     }
 }
