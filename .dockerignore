@@ -1,16 +1,30 @@
+# Build artifacts
 target/
+debug/
+mutants.out*/
+*.pdb
+*.log
+
+# Version control
 .git/
 .gitignore
 .github/
+
+# Documentation
 *.md
 !README.md
-Dockerfile
-.dockerignore
-*.log
-*.lock
-!Cargo.lock
+LICENSE
+
+# IDE & System files
 .idea/
 .vscode/
-*.pdb
-debug/
-mutants.out*/
+**/.DS_Store
+Thumbs.db
+
+# Docker config
+Dockerfile
+.dockerignore
+
+# Dependencies
+*.lock
+!Cargo.lock
