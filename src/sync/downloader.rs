@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use sha2::{Digest, Sha256};
 use thiserror::Error;
+use tokio::io::AsyncWriteExt;
 use tracing::info;
 
 #[derive(Error, Debug)]
@@ -46,12 +47,22 @@ pub async fn download_csv(url: &str) -> Result<DownloadResult, DownloadError> {
 }
 
 pub async fn save_csv(path: &Path, content: &str) -> Result<(), DownloadError> {
-    tokio::fs::write(path, content).await?;
-    Ok(())
+    atomic_write(path, content.as_bytes()).await
 }
 
 pub async fn save_hash(path: &Path, hash: &str) -> Result<(), DownloadError> {
-    tokio::fs::write(path, hash).await?;
+    atomic_write(path, hash.as_bytes()).await
+}
+
+async fn atomic_write(path: &Path, content: &[u8]) -> Result<(), DownloadError> {
+    let temp_path = path.with_extension("tmp");
+
+    let mut file = tokio::fs::File::create(&temp_path).await?;
+    file.write_all(content).await?;
+    file.sync_all().await?;
+    drop(file);
+
+    tokio::fs::rename(&temp_path, path).await?;
     Ok(())
 }
 
