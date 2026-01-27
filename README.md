@@ -1,7 +1,7 @@
 # ProxyD
 
 [![CI](https://github.com/NetworkCats/ProxyD/actions/workflows/ci.yml/badge.svg)](https://github.com/NetworkCats/ProxyD/actions/workflows/ci.yml)
-[![CodeQL](https://github.com/NetworkCats/ProxyD/actions/workflows/codeql.yml/badge.svg)](https://github.com/NetworkCats/ProxyD/actions/workflows/codeql.yml)
+[![CodeQL](https://github.com/NetworkCats/ProxyD/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/NetworkCats/ProxyD/actions/workflows/github-code-scanning/codeql/)
 [![codecov](https://codecov.io/gh/NetworkCats/ProxyD/branch/main/graph/badge.svg)](https://codecov.io/gh/NetworkCats/ProxyD)
 
 IP reputation API service with gRPC and REST interfaces.
