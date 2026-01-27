@@ -5,7 +5,10 @@ use std::time::Duration;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
-use tracing::info;
+use tracing::{info, warn};
+
+const MAX_RETRIES: u32 = 3;
+const INITIAL_BACKOFF_MS: u64 = 1000;
 
 #[derive(Error, Debug)]
 pub enum DownloadError {
@@ -13,6 +16,8 @@ pub enum DownloadError {
     Request(#[from] reqwest::Error),
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("Download failed after {0} retries")]
+    MaxRetriesExceeded(u32),
 }
 
 pub struct DownloadResult {
@@ -35,6 +40,37 @@ fn get_http_client() -> &'static reqwest::Client {
 pub async fn download_csv(url: &str) -> Result<DownloadResult, DownloadError> {
     info!("Downloading CSV from {}", url);
 
+    let mut last_error = None;
+
+    for attempt in 0..MAX_RETRIES {
+        if attempt > 0 {
+            let backoff = Duration::from_millis(INITIAL_BACKOFF_MS * 2u64.pow(attempt - 1));
+            warn!(
+                "Download attempt {} failed, retrying in {:?}",
+                attempt, backoff
+            );
+            tokio::time::sleep(backoff).await;
+        }
+
+        match download_csv_once(url).await {
+            Ok(result) => return Ok(result),
+            Err(e) => {
+                last_error = Some(e);
+            }
+        }
+    }
+
+    if let Some(e) = last_error {
+        warn!(
+            "Download failed after {} retries, last error: {}",
+            MAX_RETRIES, e
+        );
+    }
+
+    Err(DownloadError::MaxRetriesExceeded(MAX_RETRIES))
+}
+
+async fn download_csv_once(url: &str) -> Result<DownloadResult, DownloadError> {
     let client = get_http_client();
 
     let response = client.get(url).send().await?.error_for_status()?;
