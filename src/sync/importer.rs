@@ -178,6 +178,7 @@ fn do_incremental_import(
     let mut added = 0u64;
     let mut updated = 0u64;
     let mut deleted = 0u64;
+    let mut batch_count = 0;
 
     let mut txn = db.begin_write()?;
 
@@ -186,19 +187,35 @@ fn do_incremental_import(
             None => {
                 db.insert_record(&mut txn, &record.ip, &record.flags)?;
                 added += 1;
+                batch_count += 1;
             }
             Some(existing_flags) if *existing_flags != &record.flags => {
                 db.insert_record(&mut txn, &record.ip, &record.flags)?;
                 updated += 1;
+                batch_count += 1;
             }
             Some(_) => {}
+        }
+
+        if batch_count >= BATCH_COMMIT_SIZE {
+            txn.commit()?;
+            txn = db.begin_write()?;
+            batch_count = 0;
         }
     }
 
     for (ip, _) in &existing {
         if !new_keys.contains(ip.as_str()) {
-            db.delete_record(&mut txn, ip)?;
-            deleted += 1;
+            if db.delete_record(&mut txn, ip)? {
+                deleted += 1;
+                batch_count += 1;
+            }
+
+            if batch_count >= BATCH_COMMIT_SIZE {
+                txn.commit()?;
+                txn = db.begin_write()?;
+                batch_count = 0;
+            }
         }
     }
 
