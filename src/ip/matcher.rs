@@ -4,6 +4,7 @@ use std::sync::Arc;
 use ipnetwork::IpNetwork;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
 use thiserror::Error;
 
 use crate::db::{Database, DbError};
@@ -54,12 +55,14 @@ pub struct MatchedEntry {
     pub flags: ReputationFlags,
 }
 
+pub type MatchedEntryVec = SmallVec<[MatchedEntry; 4]>;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct LookupResult {
     pub found: bool,
     pub query: String,
     pub flags: ReputationFlags,
-    pub matched_entries: Vec<MatchedEntry>,
+    pub matched_entries: MatchedEntryVec,
 }
 
 pub fn lookup_ip(db: &Arc<Database>, ip_str: &str) -> Result<LookupResult, LookupError> {
@@ -67,7 +70,7 @@ pub fn lookup_ip(db: &Arc<Database>, ip_str: &str) -> Result<LookupResult, Looku
         .parse()
         .map_err(|_| LookupError::InvalidIp(ip_str.to_owned()))?;
 
-    let mut matched_entries = Vec::new();
+    let mut matched_entries = MatchedEntryVec::new();
     let mut merged_flags = ReputationFlags::default();
 
     if let Some(flags) = db.lookup_ip(ip)? {
@@ -99,7 +102,7 @@ pub fn lookup_range(db: &Arc<Database>, cidr_str: &str) -> Result<LookupResult, 
         .parse()
         .map_err(|_| LookupError::InvalidCidr(cidr_str.to_owned()))?;
 
-    let mut matched_entries = Vec::new();
+    let mut matched_entries = MatchedEntryVec::new();
 
     if let Some(flags) = db.lookup_cidr(network)? {
         matched_entries.push(MatchedEntry {
@@ -139,7 +142,7 @@ pub fn lookup_ips_batch(
         .zip(db_results.par_iter())
         .zip(ip_strs.par_iter())
         .map(|((ip, db_result), query)| {
-            let mut matched_entries = Vec::new();
+            let mut matched_entries = MatchedEntryVec::new();
             let mut merged_flags = ReputationFlags::default();
 
             if let Some(flags) = db_result {
@@ -189,7 +192,7 @@ pub fn lookup_ranges_batch(
         .zip(db_results.par_iter())
         .zip(cidr_strs.par_iter())
         .map(|((network, db_result), query)| {
-            let mut matched_entries = Vec::new();
+            let mut matched_entries = MatchedEntryVec::new();
 
             if let Some(flags) = db_result {
                 matched_entries.push(MatchedEntry {

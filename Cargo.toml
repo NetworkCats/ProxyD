@@ -32,7 +32,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 thiserror = "2"
 sha2 = "0.10"
 hex = "0.4"
-smallvec = "1"
+smallvec = { version = "1", features = ["serde"] }
 mimalloc = { version = "0.1", default-features = false }
 bytes = "1"
 
